@@ -10,7 +10,7 @@
 #include <sstream>
 #include <string>
 
-#define PORT 5002
+#define PORT 9000
 
 int main(int argc, const char* argv[]) {
   struct sockaddr_in server_addr;
@@ -80,7 +80,18 @@ int main(int argc, const char* argv[]) {
     }
 
     write(sock_client_fd, buff, strlen(buff));
-    close(sock_client_fd);
+
+    while (1) {
+      memset(buff, 0, sizeof(buff));
+      read(sock_client_fd, buff, sizeof(buff));
+      std::cout << "From Client: " << buff;
+
+      if ((strncmp(buff, "exit", 4)) == 0) {
+        std::cout << "Server Exit...\n";
+        close(sock_client_fd);
+        break;
+      }
+    }
   }
 
   close(sock_server_fd);
