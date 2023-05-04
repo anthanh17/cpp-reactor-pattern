@@ -42,7 +42,7 @@ int main(int argc, const char* argv[]) {
   std::cout << "[Server] Socket successfully binded..\n";
 
   // Server is ready to listen
-  if ((listen(sock_server_fd, SOMAXCONN)) != 0) {
+  if ((listen(sock_server_fd, 5)) != 0) {
     std::cerr << "Listen failed...\n";
     return -1;
   }
@@ -53,10 +53,11 @@ int main(int argc, const char* argv[]) {
   // while waiting for clients
   struct sockaddr_in client_addr;
   char buff[1024] = "Hello from server!";
+  int len = sizeof(client_addr);
   while (true) {
     // Accept connection the data packet from clients
     int sock_client_fd = accept(sock_server_fd, (struct sockaddr*)&client_addr,
-                                (socklen_t*)sizeof(client_addr));
+                                (socklen_t*)&len);
     std::cout << "[Server] Client successfully connected!" << std::endl;
     // current date/time based on current system
     time_t now = time(0);
@@ -65,7 +66,7 @@ int main(int argc, const char* argv[]) {
     // Try to find out who is the client
     char host_client[NI_MAXHOST];
     char port_client[NI_MAXSERV];
-    // clear - copy one character in object => fill all element object equal 0
+    // clear - copy one character in object => fill all element object equal0
     memset(host_client, 0, NI_MAXHOST);
     memset(port_client, 0, NI_MAXSERV);
     if (getnameinfo((sockaddr*)&client_addr, sizeof(client_addr), host_client,
