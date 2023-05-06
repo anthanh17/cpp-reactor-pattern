@@ -61,7 +61,6 @@ int main(int argc, const char* argv[]) {
     std::cout << "[Server] Client successfully connected!" << std::endl;
     // current date/time based on current system
     time_t now = time(0);
-    std::cout << "Time: " << ctime(&now);
 
     // Try to find out who is the client
     char host_client[NI_MAXHOST];
@@ -71,8 +70,8 @@ int main(int argc, const char* argv[]) {
     memset(port_client, 0, NI_MAXSERV);
     if (getnameinfo((sockaddr*)&client_addr, sizeof(client_addr), host_client,
                     NI_MAXHOST, port_client, NI_MAXSERV, 0) == 0) {
-      std::cout << " --> " << host_client << " connected to port "
-                << port_client << std::endl;
+      std::cout << "[+] << ctime(&now) << Connection accepted from IP : "
+                << host_client << " and port: " << port_client << std::endl;
     } else {
       inet_ntop(AF_INET, &client_addr.sin_addr, host_client, NI_MAXHOST);
       std::cout << " --> " << host_client << " connected to port "
@@ -84,10 +83,10 @@ int main(int argc, const char* argv[]) {
     while (1) {
       memset(buff, 0, sizeof(buff));
       read(sock_client_fd, buff, sizeof(buff));
-      std::cout << "From Client: " << buff;
+      std::cout << "[Client]: " << buff;
 
       if ((strncmp(buff, "exit", 4)) == 0) {
-        std::cout << "Server Exit...\n";
+        std::cout << "Client exit waiting for next connection ...!\n";
         close(sock_client_fd);
         break;
       }
