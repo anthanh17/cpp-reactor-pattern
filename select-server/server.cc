@@ -50,10 +50,12 @@ int main(int argc, const char *argv[]) {
   }
 
   std::cout << "[Server] Listening on Port " << PORT << std::endl;
+  sleep(2);
 
   // accept the incoming connection
   int addrlen = sizeof(address);
   std::cout << "Waiting for connections ...\n";
+  sleep(2);
 
   char buffer[1025];  // data buffer of 1K
 
@@ -65,7 +67,7 @@ int main(int argc, const char *argv[]) {
   fd_set readfds;
 
   // a message
-  char message[1024] = "hello i am server select";
+  char message[1024] = "Hello i am select server!";
 
   // initialise all client_socket[] to 0 so not checked
   int max_clients = 3;
@@ -158,14 +160,14 @@ int main(int argc, const char *argv[]) {
           getpeername(sd, (struct sockaddr *)&address, (socklen_t *)&addrlen);
           std::cout << "Host disconnected ip " << inet_ntoa(address.sin_addr)
                     << " port " << ntohs(address.sin_port) << std::endl;
-          sleep(1);
+          sleep(2);
 
           // Close the socket and mark as 0 in list for reuse
           close(sd);
           client_socket[i] = 0;
         } else {
           std::cout << "[Client " << i << "]: " << buffer;
-          sleep(1);
+          sleep(2);
           // server send message to client
           // buffer[bytes_read] = '\0';
           // send(sd, buffer, strlen(buffer), 0);
