@@ -57,7 +57,7 @@ int main(int argc, const char *argv[]) {
 
   char buffer[1025];  // data buffer of 1K
 
-  int value_read;
+  int bytes_read;
   int sd;
   int max_sd;
 
@@ -109,6 +109,8 @@ int main(int argc, const char *argv[]) {
 
     if ((activity < 0) && (errno != EINTR)) {
       std::cerr << "select error\n";
+    } else if (activity == 0) {
+      continue;
     }
 
     // Server handler
@@ -118,7 +120,8 @@ int main(int argc, const char *argv[]) {
       std::cout << "[LOG] after accept \n";
       if (new_socket < 0) {
         std::cerr << "accept error\n";
-        exit(EXIT_FAILURE);
+        close(new_socket);
+        continue;
       }
 
       // inform user of socket number - used in send and receive commands
@@ -130,8 +133,8 @@ int main(int argc, const char *argv[]) {
       if (send(new_socket, message, strlen(message), 0) != strlen(message)) {
         std::cerr << "send";
       }
-
       std::cout << "[Server] Message sent successfully\n";
+      sleep(1);
 
       // add new socket to array of sockets
       for (int i = 0; i < max_clients; i++) {
@@ -139,7 +142,6 @@ int main(int argc, const char *argv[]) {
         if (client_socket[i] == 0) {
           client_socket[i] = new_socket;
           std::cout << "Adding to list of sockets as: " << i << std::endl;
-
           break;
         }
       }
@@ -151,11 +153,12 @@ int main(int argc, const char *argv[]) {
 
       if (FD_ISSET(sd, &readfds)) {
         // Check if it was for closing , and also read the incoming message
-        if ((value_read = read(sd, buffer, 1024)) == 0) {
+        if ((bytes_read = read(sd, buffer, 1024)) == 0) {
           // Somebody disconnected , get his details and print
           getpeername(sd, (struct sockaddr *)&address, (socklen_t *)&addrlen);
           std::cout << "Host disconnected ip " << inet_ntoa(address.sin_addr)
                     << " port " << ntohs(address.sin_port) << std::endl;
+          sleep(1);
 
           // Close the socket and mark as 0 in list for reuse
           close(sd);
@@ -164,7 +167,7 @@ int main(int argc, const char *argv[]) {
           std::cout << "[Client " << i << "]: " << buffer;
           sleep(1);
           // server send message to client
-          // buffer[value_read] = '\0';
+          // buffer[bytes_read] = '\0';
           // send(sd, buffer, strlen(buffer), 0);
         }
       }
