@@ -16,11 +16,7 @@
 #define SERVER_PORT 9000
 
 int main(int argc, const char *argv[]) {
-  int len, rc;
-  int new_sd = -1;
-  int desc_ready, end_server = 0, compress_array = 0;
-  int close_conn;
-  char buffer[80];
+  int compress_array = 0;
 
   // create socket
   int sock_server = socket(AF_INET, SOCK_STREAM, 0);
@@ -31,9 +27,8 @@ int main(int argc, const char *argv[]) {
 
   // Allow socket descriptor to be reuseable
   int opt = 1;
-  rc = setsockopt(sock_server, SOL_SOCKET, SO_REUSEADDR, (char *)&opt,
-                  sizeof(opt));
-  if (rc < 0) {
+  if (setsockopt(sock_server, SOL_SOCKET, SO_REUSEADDR, (char *)&opt,
+                 sizeof(opt)) < 0) {
     std::cerr << "setsockopt() failed";
     close(sock_server);
     exit(-1);
@@ -47,20 +42,20 @@ int main(int argc, const char *argv[]) {
   addr.sin_addr.s_addr = INADDR_ANY;
   addr.sin_port = htons(SERVER_PORT);
 
-  rc = bind(sock_server, (struct sockaddr *)&addr, sizeof(addr));
-  if (rc < 0) {
+  if (bind(sock_server, (struct sockaddr *)&addr, sizeof(addr)) < 0) {
     std::cerr << "bind() failed";
     close(sock_server);
     exit(-1);
   }
 
   // Listen back log
-  rc = listen(sock_server, 32);
-  if (rc < 0) {
+  if (listen(sock_server, 32) < 0) {
     std::cerr << "listen() failed";
     close(sock_server);
     exit(-1);
   }
+  std::cout << "[Server] Listening on Port " << SERVER_PORT << std::endl;
+  std::cout << "Waiting for connections ...\n";
 
   // Initialize the pollfd structure
   struct pollfd fds[200];
@@ -73,45 +68,35 @@ int main(int argc, const char *argv[]) {
 
   int timeout = -1;  // 0 -  nonblocking
 
-  int nfds = 1, current_size = 0, j;
+  int nfds = 1, current_size = 0;
 
   // Loop waiting for incoming connects or for incoming data on any of the
   // connected sockets.
-  do {
-
-    // Call poll() and wait 3 minutes for it to complete.
-    std::cout << "Waiting on poll()...\n";
-    rc = poll(fds, nfds, timeout);
-    std::cout << "[LOG] after select \n";
-
-    // Check to see if the poll call failed.
-    if (rc < 0) {
+  bool run_server = true;
+  int close_conn;
+  char recv_buffer[80];
+  while (run_server) {
+    std::cout << "[LOG] before poll \n";
+    if (poll(fds, nfds, timeout) < 0) {
       std::cerr << "poll() failed";
       break;
     }
+    std::cout << "[LOG] after select \n";
 
     current_size = nfds;
     for (int i = 0; i < current_size; i++) {
-      if (fds[i].revents == 0) continue;
-
-      // If revents is not POLLIN, it's an unexpected result,
-      // log and end the server.
-      if (fds[i].revents != POLLIN) {
-        std::cout << "Error! revents = " << fds[i].revents << std::endl;
-        end_server = 1;
-        break;
-      }
+      if ((fds[i].revents & POLLIN) != POLLIN) continue;
 
       // if SERVER request for new connection
       if (fds[i].fd == sock_server) {
         // Listening descriptor is readable.
         std::cout << "Listening socket is readable\n";
 
-        new_sd = accept(sock_server, NULL, NULL);
+        int new_sd = accept(sock_server, NULL, NULL);
         if (new_sd < 0) {
           if (errno != EWOULDBLOCK) {
             std::cerr << "accept() failed";
-            end_server = 1;
+            run_server = false;
           }
           break;
         }
@@ -132,8 +117,8 @@ int main(int argc, const char *argv[]) {
         std::cout << "Descriptor " << fds[i].fd << " is readable\n";
         close_conn = 0;
 
-        rc = read(fds[i].fd, buffer, sizeof(buffer));
-        if (rc < 0) {
+        int bytes_read = read(fds[i].fd, recv_buffer, sizeof(recv_buffer));
+        if (bytes_read < 0) {
           if (errno != EWOULDBLOCK) {
             std::cerr << "  recv() failed";
             close_conn = 1;
@@ -141,13 +126,12 @@ int main(int argc, const char *argv[]) {
           break;
         }
         // Check to see if the connection has been closed by the client
-        if (rc == 0) {
+        if (bytes_read == 0) {
           std::cout << "Connection closed\n";
           close_conn = 1;
         }
         // Data was received
-        len = rc;
-        std::cout << len << " bytes received: " << buffer;
+        std::cout << " bytes received: " << recv_buffer;
 
         if (close_conn) {
           close(fds[i].fd);
@@ -166,7 +150,7 @@ int main(int argc, const char *argv[]) {
       compress_array = 0;
       for (int i = 0; i < nfds; i++) {
         if (fds[i].fd == -1) {
-          for (j = i; j < nfds; j++) {
+          for (int j = i; j < nfds; j++) {
             fds[j].fd = fds[j + 1].fd;
           }
           i--;
@@ -174,7 +158,7 @@ int main(int argc, const char *argv[]) {
         }
       }
     }
-  } while (end_server == 0);  // End of serving running.
+  }
 
   // Clean up all of the sockets that are open
   for (int i = 0; i < nfds; i++) {
