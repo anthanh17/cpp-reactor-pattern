@@ -27,17 +27,18 @@ int main(int argc, const char *argv[]) {
   int opt = 1;
   if (setsockopt(master_socket, SOL_SOCKET, SO_REUSEADDR, (char *)&opt,
                  sizeof(opt)) < 0) {
-    std::cerr << "[Server] Setsockopt";
+    std::cerr << "[Server] setsockopt() failed";
+    close(master_socket);
     exit(EXIT_FAILURE);
   }
 
+  // Bind the socket
   struct sockaddr_in address;
   // type of socket created
   address.sin_family = AF_INET;
   address.sin_addr.s_addr = INADDR_ANY;
   address.sin_port = htons(PORT);
 
-  // Bind
   if (bind(master_socket, (struct sockaddr *)&address, sizeof(address)) < 0) {
     std::cerr << "[Server] Bind failed!";
     exit(EXIT_FAILURE);
