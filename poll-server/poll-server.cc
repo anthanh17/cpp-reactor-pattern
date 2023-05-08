@@ -77,9 +77,12 @@ int main(int argc, const char *argv[]) {
   char recv_buffer[80];
   while (run_server) {
     std::cout << "[LOG] before poll \n";
-    if (poll(fds, nfds, timeout) < 0) {
+    int ready_fds = poll(fds, nfds, timeout);
+    if (ready_fds < 0) {
       std::cerr << "poll() failed";
-      break;
+      continue;
+    } else if (ready_fds == 0) {
+      continue;
     }
     std::cout << "[LOG] after select \n";
 
@@ -94,11 +97,9 @@ int main(int argc, const char *argv[]) {
 
         int new_sd = accept(sock_server, NULL, NULL);
         if (new_sd < 0) {
-          if (errno != EWOULDBLOCK) {
-            std::cerr << "accept() failed";
-            run_server = false;
-          }
-          break;
+          std::cerr << "accept() failed";
+          close(new_sd);
+          continue;
         }
         std::cout << "New incoming connection - " << new_sd << std::endl;
         // Add the new incoming connection to the pollfd structure
@@ -119,11 +120,9 @@ int main(int argc, const char *argv[]) {
 
         int bytes_read = read(fds[i].fd, recv_buffer, sizeof(recv_buffer));
         if (bytes_read < 0) {
-          if (errno != EWOULDBLOCK) {
-            std::cerr << "  recv() failed";
-            close_conn = 1;
-          }
-          break;
+          std::cerr << "  read() failed";
+          close_conn = 1;
+          continue;
         }
         // Check to see if the connection has been closed by the client
         if (bytes_read == 0) {
