@@ -64,7 +64,6 @@ int main(int argc, const char *argv[]) {
   // Set up the initial listening socket
   fds[0].fd = sock_server;
   fds[0].events = POLLIN;
-  fds[0].revents = 0;
 
   int timeout = -1;  // 0 -  nonblocking
 
@@ -88,7 +87,7 @@ int main(int argc, const char *argv[]) {
 
     current_size = nfds;
     for (int i = 0; i < current_size; i++) {
-      if ((fds[i].revents & POLLIN) != POLLIN) continue;
+      if (fds[i].revents != POLLIN) continue;
 
       // if SERVER request for new connection
       if (fds[i].fd == sock_server) {
@@ -105,7 +104,6 @@ int main(int argc, const char *argv[]) {
         // Add the new incoming connection to the pollfd structure
         fds[nfds].fd = new_sd;
         fds[nfds].events = POLLIN;
-        fds[nfds].revents = 0;
         nfds++;
 
         char message[1024] = "Hello i am select server!";
