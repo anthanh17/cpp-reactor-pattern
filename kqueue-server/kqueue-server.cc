@@ -113,44 +113,58 @@ void EventLoop(int kq, int local_s) {
   struct sockaddr_in addr;
   int socklen = sizeof(addr);
 
+  struct timespec tmout = {0,  /* block for 0 seconds at most */
+                           0}; /* nanoseconds */
+
   while (1) {
-    int num_events = kevent(kq, NULL, 0, evList, MAX_EVENTS, NULL);
-    for (int i = 0; i < num_events; i++) {
-      // READ
-      if (evList[i].filter == EVFILT_READ) {
-        // receive new connection
-        if (evList[i].ident == local_s) {
-          int fd = accept(evList[i].ident, (struct sockaddr *)&addr,
-                          (socklen_t *)&socklen);
-          if (fd < 1) {
-            std::cerr << "accept failed";
-            close(fd);
-            exit(-1);
-          }
-          // add conection to array
-          if (AddConnection(fd) == 0) {
-            EV_SET(&evSet, fd, EVFILT_READ, EV_ADD, 0, 0, NULL);
+    int num_events = kevent(kq, NULL, 0, evList, MAX_EVENTS, &tmout);
+    // returns the number of events placed in the eventlist
+    if (num_events < 0) {
+      std::cerr << "kevent failed";
+      exit(-1);
+    } else if (num_events == 0) {
+      std::cout << "Nonblocking!\n";
+      sleep(1);
+    } else {
+      for (int i = 0; i < num_events; i++) {
+        // READ
+        if (evList[i].filter == EVFILT_READ) {
+          // receive new connection
+          if (evList[i].ident == local_s) {
+            int fd = accept(evList[i].ident, (struct sockaddr *)&addr,
+                            (socklen_t *)&socklen);
+            if (fd < 1) {
+              std::cerr << "accept failed";
+              close(fd);
+              exit(-1);
+            }
+            // add conection to array
+            if (AddConnection(fd) == 0) {
+              EV_SET(&evSet, fd, EVFILT_READ, EV_ADD, 0, 0, NULL);
+              kevent(kq, &evSet, 1, NULL, 0, NULL);
+              ServerSendWelcomeMsg(fd);
+            } else {
+              printf("Add failed connection.\n");
+              close(fd);
+            }
+          }  // client disconnected
+          else if (evList[i].flags & EV_EOF) {
+            int fd = evList[i].ident;
+            printf("client #%d disconnected.\n", GetConnectionIndex(fd));
+            EV_SET(&evSet, fd, EVFILT_READ, EV_DELETE, 0, 0, NULL);
             kevent(kq, &evSet, 1, NULL, 0, NULL);
-            ServerSendWelcomeMsg(fd);
-          } else {
-            printf("Add failed connection.\n");
-            close(fd);
+            RemoveConnection(fd);
+          }  // read message from client
+          else {
+            ReceiveMessages(evList[i].ident);
+            char msg[80] = "Server send!\n";
+            send(evList[i].ident, msg, strlen(msg), 0);
           }
-        }  // client disconnected
-        else if (evList[i].flags & EV_EOF) {
-          int fd = evList[i].ident;
-          printf("client #%d disconnected.\n", GetConnectionIndex(fd));
-          EV_SET(&evSet, fd, EVFILT_READ, EV_DELETE, 0, 0, NULL);
-          kevent(kq, &evSet, 1, NULL, 0, NULL);
-          RemoveConnection(fd);
-        }  // read message from client
-        else {
-          ReceiveMessages(evList[i].ident);
+        } else if (evList[i].filter == EVFILT_WRITE) {
+          std::cout << "write!";
+        } else {
+          std::cout << "nothing!";
         }
-      } else if (evList[i].filter == EVFILT_WRITE) {
-        std::cout << "write!";
-      } else {
-        std::cout << "nothing!";
       }
     }
   }
