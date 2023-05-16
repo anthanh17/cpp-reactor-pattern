@@ -112,43 +112,46 @@ void EventLoop(int kq, int local_s, std::queue<int>& client_queue,
     struct kevent events[10];
 
     // returns the number of events placed in the eventlist
-    int num_events = kevent(kq, nullptr, 0, events, 10, nullptr);
+    int num_events = kevent(kq, nullptr, 0, events, 10, &tmout);
 
     if (num_events < 0) {
       std::cerr << "Error polling for events\n";
       exit(-1);
-    }
+    } else if (num_events == 0) {
+      // std::cout << "nothing happended" << std::endl;
+    } else {
+      for (int i = 0; i < num_events; i++) {
+        if (events[i].ident == local_s) {
+          // Accept new connection
+          int client_socket = accept(local_s, nullptr, nullptr);
+          if (client_socket < 1) {
+            std::cerr << "accept failed";
+            close(client_socket);
+            exit(-1);
+          }
 
-    for (int i = 0; i < num_events; i++) {
-      if (events[i].ident == local_s) {
-        // Accept new connection
-        int client_socket = accept(local_s, nullptr, nullptr);
-        if (client_socket < 1) {
-          std::cerr << "accept failed";
-          close(client_socket);
-          exit(-1);
+          // Get info client
+          getpeername(client_socket, (struct sockaddr*)&client_addr,
+                      (socklen_t*)&addrlen);
+          std::cout << "[+] Connection accepted from IP : "
+                    << inet_ntoa(client_addr.sin_addr)
+                    << " and port: " << ntohs(client_addr.sin_port)
+                    << std::endl;
+
+          // event want to monitor
+          struct kevent kev {};
+          EV_SET(&kev, client_socket, EVFILT_READ, EV_ADD, 0, 0, nullptr);
+          kevent(kq, &kev, 1, nullptr, 0, nullptr);
+
+          std::lock_guard<std::mutex> lock(queue_mutex);
+          client_queue.push(client_socket);
+
+          // Notify worker threads to start processing tasks
+          cv.notify_all();
+        } else {
+          // Handle existing connection
+          workerThreadFunc(client_queue, queue_mutex, cv);
         }
-
-        // Get info client
-        getpeername(client_socket, (struct sockaddr*)&client_addr,
-                    (socklen_t*)&addrlen);
-        std::cout << "[+] Connection accepted from IP : "
-                  << inet_ntoa(client_addr.sin_addr)
-                  << " and port: " << ntohs(client_addr.sin_port) << std::endl;
-
-        // event want to monitor
-        struct kevent kev {};
-        EV_SET(&kev, client_socket, EVFILT_READ, EV_ADD, 0, 0, nullptr);
-        kevent(kq, &kev, 1, nullptr, 0, nullptr);
-
-        std::lock_guard<std::mutex> lock(queue_mutex);
-        client_queue.push(client_socket);
-
-        // Notify worker threads to start processing tasks
-        cv.notify_all();
-      } else {
-        // Handle existing connection
-        workerThreadFunc(client_queue, queue_mutex, cv);
       }
     }
   }
