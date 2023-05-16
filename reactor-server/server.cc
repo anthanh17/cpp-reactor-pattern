@@ -1,33 +1,77 @@
-
-#include <arpa/inet.h>  // inet
-#include <err.h>
-#include <netdb.h>  // NI_MAXSERV, NI_MAXHOST
-#include <stdio.h>
-#include <stdlib.h>
-#include <string.h>
+#include <arpa/inet.h>
+#include <netinet/in.h>
 #include <sys/event.h>
 #include <sys/socket.h>
-#include <sys/time.h>
-#include <sys/types.h>
-#include <unistd.h>  // read, write, close
-#include <ctime>
+#include <unistd.h>
+#include <condition_variable>
+#include <cstring>
 #include <iostream>
+#include <mutex>
+#include <queue>
+#include <thread>
+#include <vector>
 
 #define SERVER_PORT 9000
-#define MAX_EVENTS 32
+
+const int NUM_THREADS = 4;
+
+// Function to be executed by the worker threads
+void workerThreadFunc(std::queue<int>& client_queue, std::mutex& queue_mutex,
+                      std::condition_variable& cv) {
+  while (true) {
+    std::unique_lock<std::mutex> lock(queue_mutex);
+
+    // Wait until there's a task in the queue or the stop flag is set
+    cv.wait(lock, [&client_queue] { return !client_queue.empty(); });
+
+    // If stop flag is set and the task queue is empty, exit the thread
+    if (client_queue.empty()) {
+      break;
+    }
+
+    // Retrieve a task from the queue
+    int client_socket = client_queue.front();
+    client_queue.pop();
+
+    // Unlock the mutex before executing the task
+    lock.unlock();
+
+    // Process the task
+    char buffer[1024];
+    while (true) {
+      int num_bytes = recv(client_socket, buffer, sizeof(buffer), 0);
+      if (num_bytes == 0) {
+        // Connection closed by client
+        std::cout << "Client disconnected\n";
+        close(client_socket);
+        break;
+      } else if (num_bytes < 0) {
+        // Error occurred
+        std::cerr << "Error reading from client\n";
+        close(client_socket);
+        break;
+      } else {
+        // Process data
+        buffer[num_bytes] = '\0';
+        std::cout << "Received data: " << buffer << std::endl;
+      }
+    }
+  }
+}
 
 int CreateSocketAndListen() {
-  int local_s = socket(AF_INET, SOCK_STREAM, 0);
-  if (local_s < 0) {
+  int server_socket = socket(AF_INET, SOCK_STREAM, 0);
+  if (server_socket < 0) {
     std::cerr << "Socket() failed";
     exit(-1);
   }
+
   // Allow socket descriptor to be reuseable
   int opt = 1;
-  if (setsockopt(local_s, SOL_SOCKET, SO_REUSEADDR, (char *)&opt, sizeof(opt)) <
-      0) {
+  if (setsockopt(server_socket, SOL_SOCKET, SO_REUSEADDR, (char*)&opt,
+                 sizeof(opt)) < 0) {
     std::cerr << "Setsockopt() failed";
-    close(local_s);
+    close(server_socket);
     exit(-1);
   }
 
@@ -38,149 +82,83 @@ int CreateSocketAndListen() {
   addr.sin_family = AF_INET;
   addr.sin_addr.s_addr = INADDR_ANY;
   addr.sin_port = htons(SERVER_PORT);
-  if (bind(local_s, (struct sockaddr *)&addr, sizeof(addr)) < 0) {
+  if (bind(server_socket, (struct sockaddr*)&addr, sizeof(addr)) < 0) {
     std::cerr << "Bind() failed";
-    close(local_s);
+    close(server_socket);
     exit(-1);
   }
 
   // Listen back log
-  if (listen(local_s, 32) < 0) {
+  if (listen(server_socket, 32) < 0) {
     std::cerr << "listen() failed";
-    close(local_s);
+    close(server_socket);
     exit(-1);
   }
   std::cout << "[Server] Listening on Port " << SERVER_PORT << std::endl;
   std::cout << "Waiting for connections ...\n";
 
-  return local_s;
+  return server_socket;
 }
 
-// API connection
-#define NUM_CLIENTS 10
-int clients_fd[NUM_CLIENTS];
-
-int GetConnectionIndex(int fd) {
-  for (int i = 0; i < NUM_CLIENTS; i++)
-    if (clients_fd[i] == fd) return i;
-  return -1;
-}
-
-int AddConnection(int fd) {
-  if (fd < 1) return -1;
-  // get fd = = in client list
-  int index = GetConnectionIndex(0);
-  if (index == -1) {
-    std::cerr << "Index failed, there are no connections in the array!";
-    return -1;
-  }
-  // add fd to first element = 0
-  clients_fd[index] = fd;
-  return 0;
-}
-
-int RemoveConnection(int fd) {
-  if (fd < 1) return -1;
-  int index = GetConnectionIndex(fd);
-  if (index == -1) {
-    std::cerr << "Index failed, there are no connections in the array!";
-    return -1;
-  }
-  clients_fd[index] = 0;
-  return close(fd);
-}
-
-void ServerSendWelcomeMsg(int client_fd) {
-  char msg[80];
-  sprintf(msg, "welcome! you are client #%d!\n", GetConnectionIndex(client_fd));
-  send(client_fd, msg, strlen(msg), 0);
-}
-
-void ReceiveMessages(int server_fd) {
-  char buf[256];
-  int bytes_read = recv(server_fd, buf, sizeof(buf) - 1, 0);
-  buf[bytes_read] = 0;
-  printf("client #%d: %s", GetConnectionIndex(server_fd), buf);
-  fflush(stdout);
-}
-
-void EventLoop(int kq, int local_s) {
-  // event want to monitor
-  struct kevent evSet;
-  // events that were triggered
-  struct kevent evList[MAX_EVENTS];
-
-  struct sockaddr_in addr;
-  int socklen = sizeof(addr);
-
-  struct timespec tmout = {0,  /* block for 0 seconds at most */
-                           0}; /* nanoseconds */
-
-  while (1) {
-    int num_events = kevent(kq, NULL, 0, evList, MAX_EVENTS, &tmout);
-    // returns the number of events placed in the eventlist
+void EventLoop(int kq, int local_s, std::queue<int>& client_queue,
+               std::mutex& queue_mutex, std::condition_variable& cv) {
+  while (true) {
+    struct kevent events[10];
+    int num_events = kevent(kq, nullptr, 0, events, 10, nullptr);
     if (num_events < 0) {
-      std::cerr << "kevent failed";
+      std::cerr << "Error polling for events\n";
       exit(-1);
-    } else if (num_events == 0) {
-      std::cout << "Nonblocking!\n";
-      sleep(1);
-    } else {
-      for (int i = 0; i < num_events; i++) {
-        // READ
-        if (evList[i].filter == EVFILT_READ) {
-          // receive new connection
-          if (evList[i].ident == local_s) {
-            int fd = accept(evList[i].ident, (struct sockaddr *)&addr,
-                            (socklen_t *)&socklen);
-            if (fd < 1) {
-              std::cerr << "accept failed";
-              close(fd);
-              exit(-1);
-            }
-            // add conection to array
-            if (AddConnection(fd) == 0) {
-              EV_SET(&evSet, fd, EVFILT_READ, EV_ADD, 0, 0, NULL);
-              kevent(kq, &evSet, 1, NULL, 0, NULL);
-              ServerSendWelcomeMsg(fd);
-            } else {
-              printf("Add failed connection.\n");
-              close(fd);
-            }
-          }  // client disconnected
-          else if (evList[i].flags & EV_EOF) {
-            int fd = evList[i].ident;
-            printf("client #%d disconnected.\n", GetConnectionIndex(fd));
-            EV_SET(&evSet, fd, EVFILT_READ, EV_DELETE, 0, 0, NULL);
-            kevent(kq, &evSet, 1, NULL, 0, NULL);
-            RemoveConnection(fd);
-          }  // read message from client
-          else {
-            ReceiveMessages(evList[i].ident);
-            char msg[80] = "Server send!\n";
-            send(evList[i].ident, msg, strlen(msg), 0);
-          }
-        } else if (evList[i].filter == EVFILT_WRITE) {
-          std::cout << "write!";
-        } else {
-          std::cout << "nothing!";
-        }
+    }
+
+    for (int i = 0; i < num_events; i++) {
+      if (events[i].ident == local_s) {
+        // Accept new connection
+        int client_socket = accept(local_s, nullptr, nullptr);
+        struct kevent kev {};
+        EV_SET(&kev, client_socket, EVFILT_READ, EV_ADD, 0, 0, nullptr);
+        kevent(kq, &kev, 1, nullptr, 0, nullptr);
+
+        std::lock_guard<std::mutex> lock(queue_mutex);
+        client_queue.push(client_socket);
+        cv.notify_one();
+      } else {
+        // Handle existing connection
+        workerThreadFunc(client_queue, queue_mutex, cv);
       }
     }
   }
 }
 
-int main(int argc, const char *argv[]) {
-  int server_fd = CreateSocketAndListen();
+int main() {
+  int server_socket = CreateSocketAndListen();
 
   // The kqueue holds all the events we are interested in.
   int kq = kqueue();
   if (kq == -1) std::cerr << "kqueue() failed";
+
   // add sock server to queue monitor
-  struct kevent evSet;
-  EV_SET(&evSet, server_fd, EVFILT_READ, EV_ADD, 0, 0, NULL);
-  kevent(kq, &evSet, 1, NULL, 0, NULL);
+  struct kevent evSet {};
+  EV_SET(&evSet, server_socket, EVFILT_READ, EV_ADD, 0, 0, nullptr);
+  kevent(kq, &evSet, 1, nullptr, 0, nullptr);
+
+  std::mutex queue_mutex;
+  std::condition_variable cv;
+  std::queue<int> client_queue;
+
+  // Create worker threads and add them to the thread pool
+  std::vector<std::thread> workerThreads;
+  for (int i = 0; i < NUM_THREADS; i++) {
+    workerThreads.emplace_back(workerThreadFunc, std::ref(client_queue),
+                               std::ref(queue_mutex), std::ref(cv));
+  }
+
   // event loop
-  EventLoop(kq, server_fd);
+  EventLoop(kq, server_socket, std::ref(client_queue), std::ref(queue_mutex),
+            std::ref(cv));
+
+  // Join worker threads with the main thread
+  for (auto& thread : workerThreads) {
+    thread.join();
+  }
   return 0;
 }
