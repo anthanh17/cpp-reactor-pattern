@@ -4,6 +4,7 @@
 #include <sys/socket.h>
 #include <unistd.h>
 
+#include <atomic>
 #include <condition_variable>
 #include <cstring>
 #include <iostream>
@@ -20,6 +21,7 @@ const int NUM_THREADS = 4;
 std::mutex queue_mutex;
 std::condition_variable condition;
 std::queue<int> client_queue;
+std::atomic<bool> stop_flag(false);
 
 int CreateSocketAndListen() {
   // create a server socket
@@ -68,10 +70,10 @@ void EventLoop() {
     std::unique_lock<std::mutex> lock(queue_mutex);
 
     // Wait until there's a task in the queue or the stop flag is set
-    condition.wait(lock, [] { return !client_queue.empty(); });
+    condition.wait(lock, [] { return !client_queue.empty() || stop_flag.load(); });
 
-    // If task queue is empty, exit the thread
-    if (client_queue.empty()) {
+    // If stop flag is set and the task queue is empty, exit the thread
+    if (stop_flag.load() && client_queue.empty()) {
       break;
     }
 
@@ -181,6 +183,12 @@ int main() {
 
   // The event demultiplexer will push new events to the Event Queue
   EventDemultiplexer(kq, server_socket);
+
+  // Stop worker threads by setting the stop flag
+  stop_flag.store(true);
+
+  // notify all the workers to stop
+  condition.notify_all();
 
   // Join worker threads with the main thread
   for (auto &worker : worker_threads) {
