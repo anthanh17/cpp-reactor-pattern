@@ -65,6 +65,36 @@ int CreateSocketAndListen() {
   return server_socket;
 }
 
+void Handler(const int client_socket) {
+  char buffer[1024];
+  struct sockaddr_in address {};
+  int addrlen = sizeof(address);
+
+  getpeername(client_socket, (struct sockaddr *)&address,
+              (socklen_t *)&addrlen);
+
+  while (true) {
+    int num_bytes = recv(client_socket, buffer, sizeof(buffer), 0);
+    if (num_bytes == 0) {
+      // Connection closed by client
+      std::cout << "Client disconnected ip " << inet_ntoa(address.sin_addr)
+                << " port " << ntohs(address.sin_port) << std::endl;
+      close(client_socket);
+      break;
+    } else if (num_bytes < 0) {
+      // Error occurred
+      std::cerr << "Error reading from client\n";
+      close(client_socket);
+      break;
+    } else {
+      // Process data
+      buffer[num_bytes] = '\0';
+      std::cout << "Data [" << inet_ntoa(address.sin_addr) << "-"
+                << ntohs(address.sin_port) << "]: " << buffer;
+    }
+  }
+}
+
 void EventLoop() {
   while (true) {
     std::unique_lock<std::mutex> lock(queue_mutex);
@@ -85,37 +115,11 @@ void EventLoop() {
     lock.unlock();
 
     // Process the task
-    char buffer[1024];
-    struct sockaddr_in address {};
-    int addrlen = sizeof(address);
-
-    getpeername(client_socket, (struct sockaddr *)&address,
-                (socklen_t *)&addrlen);
-
-    while (true) {
-      int num_bytes = recv(client_socket, buffer, sizeof(buffer), 0);
-      if (num_bytes == 0) {
-        // Connection closed by client
-        std::cout << "Client disconnected ip " << inet_ntoa(address.sin_addr)
-                  << " port " << ntohs(address.sin_port) << std::endl;
-        close(client_socket);
-        break;
-      } else if (num_bytes < 0) {
-        // Error occurred
-        std::cerr << "Error reading from client\n";
-        close(client_socket);
-        break;
-      } else {
-        // Process data
-        buffer[num_bytes] = '\0';
-        std::cout << "Data [" << inet_ntoa(address.sin_addr) << "-"
-                  << ntohs(address.sin_port) << "]: " << buffer;
-      }
-    }
+    Handler(client_socket);
   }
 }
 
-void EventDemultiplexer(int kq, int server_socket) {
+void EventDemultiplexer(const int kq, const int server_socket) {
   // struct timespec tmout = {0, /* block for 0 seconds at most */
   //                                         0}; /* nanoseconds */
   struct sockaddr_in client_addr;
