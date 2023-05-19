@@ -22,6 +22,7 @@ std::mutex queue_mutex;
 std::condition_variable condition;
 std::queue<int> client_queue;
 std::atomic<bool> stop_flag(false);
+std::vector<std::thread> worker_threads;
 
 int CreateSocketAndListen() {
   // create a server socket
@@ -73,37 +74,37 @@ void Handler(const int client_socket) {
   getpeername(client_socket, (struct sockaddr *)&address,
               (socklen_t *)&addrlen);
 
-  while (true) {
-    int num_bytes = recv(client_socket, buffer, sizeof(buffer), 0);
-    if (num_bytes == 0) {
-      // Connection closed by client
-      std::cout << "Client disconnected ip " << inet_ntoa(address.sin_addr)
-                << " port " << ntohs(address.sin_port) << std::endl;
-      close(client_socket);
-      break;
-    } else if (num_bytes < 0) {
-      // Error occurred
-      std::cerr << "Error reading from client\n";
-      close(client_socket);
-      break;
-    } else {
-      // Process data
-      buffer[num_bytes] = '\0';
-      std::cout << "Data [" << inet_ntoa(address.sin_addr) << "-"
-                << ntohs(address.sin_port) << "]: " << buffer;
-    }
+  // while (true) {
+  int num_bytes = recv(client_socket, buffer, sizeof(buffer), 0);
+  if (num_bytes == 0) {
+    // Connection closed by client
+    std::cout << "Client disconnected ip " << inet_ntoa(address.sin_addr)
+              << " port " << ntohs(address.sin_port) << std::endl;
+    close(client_socket);
+    // break;
+  } else if (num_bytes < 0) {
+    // Error occurred
+    std::cerr << "Error reading from client\n";
+    close(client_socket);
+    // break;
+  } else {
+    // Process data
+    buffer[num_bytes] = '\0';
+    std::cout << "Data [" << inet_ntoa(address.sin_addr) << "-"
+              << ntohs(address.sin_port) << "]: " << buffer;
   }
+  // }
 }
 
-void EventLoop() {
+void EventHandlers() {
   while (true) {
     std::unique_lock<std::mutex> lock(queue_mutex);
 
     // Wait until there's a task in the queue or the stop flag is set
-    condition.wait(lock, [] { return !client_queue.empty() || stop_flag.load(); });
+    condition.wait(lock, [] { return !client_queue.empty() /* || stop_flag.load()*/; });
 
     // If stop flag is set and the task queue is empty, exit the thread
-    if (stop_flag.load() && client_queue.empty()) {
+    if (/*stop_flag.load() &&*/ client_queue.empty()) {
       break;
     }
 
@@ -125,6 +126,7 @@ void EventDemultiplexer(const int kq, const int server_socket) {
   struct sockaddr_in client_addr;
   int addrlen = sizeof(client_addr);
 
+  // Event Loop
   while (true) {
     // events that were triggered
     struct kevent events[10];
@@ -154,22 +156,19 @@ void EventDemultiplexer(const int kq, const int server_socket) {
         EV_SET(&kev, client_socket, EVFILT_READ, EV_ADD, 0, 0, nullptr);
         kevent(kq, &kev, 1, nullptr, 0, nullptr);
 
+      } else {
+        // Handle existing connection
         std::lock_guard<std::mutex> lock(queue_mutex);
-        client_queue.push(client_socket);
+        client_queue.push(events[i].ident);
 
         // Notify worker threads to start processing tasks
         condition.notify_one();
-      } else {
-        // Handle existing connection
-        EventLoop();
       }
     }
   }
 }
 
-int main() {
-  int server_socket = CreateSocketAndListen();
-
+void Reactor(const int server_socket) {
   // The kqueue holds all the events we are interested in.
   int kq = kqueue();
 
@@ -180,16 +179,21 @@ int main() {
   kevent(kq, &kev, 1, nullptr, 0, nullptr);
 
   // Create worker threads and add them to the thread pool
-  std::vector<std::thread> worker_threads;
   for (int i = 0; i < NUM_THREADS; i++) {
-    worker_threads.emplace_back(EventLoop);
+    worker_threads.emplace_back(EventHandlers);
   }
 
   // The event demultiplexer will push new events to the Event Queue
   EventDemultiplexer(kq, server_socket);
+}
+
+int main() {
+  int server_socket = CreateSocketAndListen();
+
+  Reactor(server_socket);
 
   // Stop worker threads by setting the stop flag
-  stop_flag.store(true);
+  // stop_flag.store(true);
 
   // notify all the workers to stop
   condition.notify_all();
