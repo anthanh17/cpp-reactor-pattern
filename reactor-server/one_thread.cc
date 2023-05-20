@@ -19,13 +19,22 @@
 #define NUM_CLIENTS 10
 int clients_fd[NUM_CLIENTS];
 
-int GetConnectionIndex(int fd) {
+enum class EventType {
+  kNone,
+  kAccept,
+  kRead,
+  kWrite,
+  kReadWrite,
+  kCount,
+};
+
+int GetConnectionIndex(const int fd) {
   for (int i = 0; i < NUM_CLIENTS; i++)
     if (clients_fd[i] == fd) return i;
   return -1;
 }
 
-int AddConnection(int fd) {
+int AddConnection(const int fd) {
   if (fd < 1) return -1;
   // get fd = = in client list
   int index = GetConnectionIndex(0);
@@ -38,7 +47,7 @@ int AddConnection(int fd) {
   return 0;
 }
 
-int RemoveConnection(int fd) {
+int RemoveConnection(const int fd) {
   if (fd < 1)
     return -1;
   int index = GetConnectionIndex(fd);
@@ -51,17 +60,17 @@ int RemoveConnection(int fd) {
 }
 
 int CreateSocketAndListen() {
-  int local_s = socket(AF_INET, SOCK_STREAM, 0);
-  if (local_s < 0) {
+  int server_fd = socket(AF_INET, SOCK_STREAM, 0);
+  if (server_fd < 0) {
     std::cerr << "[server] socket() failed";
     return -1;
   }
   // Allow socket descriptor to be reuseable
   int opt = 1;
-  if (setsockopt(local_s, SOL_SOCKET, SO_REUSEADDR, (char *)&opt, sizeof(opt)) <
+  if (setsockopt(server_fd, SOL_SOCKET, SO_REUSEADDR, (char *)&opt, sizeof(opt)) <
       0) {
     std::cerr << "[server] setsockopt() failed";
-    close(local_s);
+    close(server_fd);
     return -1;
   }
 
@@ -72,25 +81,25 @@ int CreateSocketAndListen() {
   addr.sin_family = AF_INET;
   addr.sin_addr.s_addr = INADDR_ANY;
   addr.sin_port = htons(SERVER_PORT);
-  if (bind(local_s, (struct sockaddr *)&addr, sizeof(addr)) < 0) {
+  if (bind(server_fd, (struct sockaddr *)&addr, sizeof(addr)) < 0) {
     std::cerr << "[server] bind() failed";
-    close(local_s);
+    close(server_fd);
     return -1;
   }
 
   // Listen back log
-  if (listen(local_s, 32) < 0) {
+  if (listen(server_fd, 32) < 0) {
     std::cerr << "[server] listen() failed";
-    close(local_s);
+    close(server_fd);
     return -1;
   }
   std::cout << "[server] listening on port: " << SERVER_PORT << std::endl;
   std::cout << "[server] waiting for connections ...\n";
 
-  return local_s;
+  return server_fd;
 }
 
-void ServerSendWelcomeMsg(int client_fd) {
+void ServerSendWelcomeMsg(const int client_fd) {
   std::string s = "welcome! you are client #" + std::to_string(GetConnectionIndex(client_fd)) + "\n";
   int string_length = s.length() + 1;
   char *char_array = new char[string_length];
@@ -100,7 +109,7 @@ void ServerSendWelcomeMsg(int client_fd) {
   delete[] char_array;
 }
 
-void ReceiveMessages(int client_fd) {
+void ReceiveMessages(const int client_fd) {
   char buff[256];
   memset(buff, 0, sizeof(buff));
   int bytes_read = read(client_fd, buff, sizeof(buff));
@@ -114,7 +123,25 @@ void ReceiveMessages(int client_fd) {
     std::cout << "[client] data #" << GetConnectionIndex(client_fd) << ": " << buff;
 }
 
-void EventDemultiplexer(int kq, int local_s) {
+void EventHandlers(EventType event, const int fd) {
+  switch (event) {
+    case EventType::kAccept:
+      break;
+    case EventType::kRead:
+      ReceiveMessages(fd);
+      break;
+    case EventType::kWrite:
+      ServerSendWelcomeMsg(fd);
+      break;
+    case EventType::kReadWrite:
+      break;
+
+    default:
+      break;
+  }
+}
+
+void EventDemultiplexer(int kq, int server_fd) {
   // event want to monitor
   struct kevent evSet;
 
@@ -127,7 +154,6 @@ void EventDemultiplexer(int kq, int local_s) {
   struct timespec tmout = {0,  /* block for 0 seconds at most */
                            0}; /* nanoseconds */
 
-  // Event Loop
   while (1) {
     // returns the number of events placed in the eventlist
     int num_events = kevent(kq, NULL, 0, evList, MAX_EVENTS, &tmout);
@@ -138,21 +164,22 @@ void EventDemultiplexer(int kq, int local_s) {
     } else if (num_events == 0) {
       // std::cout << "Nonblocking!\n";
     } else {
+      // Event Loop
       for (int i = 0; i < num_events; i++) {
         // READ
         if (evList[i].filter == EVFILT_READ) {
-          // receive new connection
-          if (evList[i].ident == local_s) {
-            int fd = accept(evList[i].ident, (struct sockaddr *)&addr,
-                            (socklen_t *)&socklen);
-            if (fd < 1) {
+          // Server - receive new connection
+          if (evList[i].ident == server_fd) {
+            int client_fd = accept(evList[i].ident, (struct sockaddr *)&addr,
+                                   (socklen_t *)&socklen);
+            if (client_fd < 1) {
               std::cerr << "[server] accept failed";
-              close(fd);
+              close(client_fd);
               exit(-1);
             }
 
             // Get info client
-            getpeername(fd, (struct sockaddr *)&addr,
+            getpeername(client_fd, (struct sockaddr *)&addr,
                         (socklen_t *)&socklen);
             std::cout << "[+] [server] connection accepted from ip: "
                       << inet_ntoa(addr.sin_addr)
@@ -160,26 +187,28 @@ void EventDemultiplexer(int kq, int local_s) {
                       << std::endl;
 
             // add conection to array
-            if (AddConnection(fd) == 0) {
+            if (AddConnection(client_fd) == 0) {
               // event want to monitor
-              EV_SET(&evSet, fd, EVFILT_READ, EV_ADD, 0, 0, NULL);
+              EV_SET(&evSet, client_fd, EVFILT_READ, EV_ADD, 0, 0, NULL);
               kevent(kq, &evSet, 1, NULL, 0, NULL);
-              ServerSendWelcomeMsg(fd);
+
+              EventHandlers(EventType::kWrite, client_fd);
             } else {
               printf("Add failed connection.\n");
-              close(fd);
+              close(client_fd);
             }
           }  // client disconnected
           else if (evList[i].flags & EV_EOF) {
-            int fd = evList[i].ident;
-            std::cout << "[client] #" << GetConnectionIndex(fd) << " disconnected.\n";
+            int client_fd = evList[i].ident;
+            std::cout << "[client] #" << GetConnectionIndex(client_fd) << " disconnected.\n";
 
-            EV_SET(&evSet, fd, EVFILT_READ, EV_DELETE, 0, 0, NULL);
+            EV_SET(&evSet, client_fd, EVFILT_READ, EV_DELETE, 0, 0, NULL);
             kevent(kq, &evSet, 1, NULL, 0, NULL);
 
-            RemoveConnection(fd);
-          } else {  // read message from client
-            ReceiveMessages(evList[i].ident);
+            RemoveConnection(client_fd);
+          } else {  // read message from client()
+            EventHandlers(EventType::kRead, evList[i].ident);
+
             char msg[80] = "Server send!\n";
             send(evList[i].ident, msg, strlen(msg), 0);
           }
@@ -193,7 +222,7 @@ void EventDemultiplexer(int kq, int local_s) {
   }
 }
 
-void Reactor(const int server_socket) {
+void Reactor(const int server_fd) {
   // The kqueue holds all the events we are interested in.
   int kq = kqueue();
   if (kq == -1)
@@ -201,11 +230,11 @@ void Reactor(const int server_socket) {
 
   // add sock server to queue monitor
   struct kevent kev {};
-  EV_SET(&kev, server_socket, EVFILT_READ, EV_ADD, 0, 0, nullptr);
+  EV_SET(&kev, server_fd, EVFILT_READ, EV_ADD, 0, 0, nullptr);
   kevent(kq, &kev, 1, nullptr, 0, nullptr);
 
   // The event demultiplexer will push new events to the Event Queue
-  EventDemultiplexer(kq, server_socket);
+  EventDemultiplexer(kq, server_fd);
 }
 
 int main(int argc, const char *argv[]) {
