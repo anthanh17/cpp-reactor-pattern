@@ -144,7 +144,7 @@ void ServerAcceptConnection(const int kq, const int server_fd) {
             << " - port: " << ntohs(addr.sin_port)
             << std::endl;
 
-  // add conection to array
+  // add connection to array
   if (AddConnection(client_fd) == 0) {
     // event want to monitor
     struct kevent evSet;
@@ -195,12 +195,12 @@ void EventDemultiplexer(const int kq, const int server_fd) {
   // events that were triggered
   struct kevent evList[MAX_EVENTS];
 
-  struct timespec tmout = {0,  /* block for 0 seconds at most */
-                           0}; /* nanoseconds */
+  struct timespec time_out = {0,  /* block for 0 seconds at most */
+                              0}; /* nanoseconds */
 
   while (1) {
     // returns the number of events placed in the eventlist
-    int num_events = kevent(kq, NULL, 0, evList, MAX_EVENTS, &tmout);
+    int num_events = kevent(kq, NULL, 0, evList, MAX_EVENTS, &time_out);
 
     if (num_events < 0) {
       std::cerr << "[server] kevent failed";
