@@ -25,6 +25,7 @@ enum class EventType {
   kRead,
   kWrite,
   kReadWrite,
+  kClientDisconnection,
   kCount,
 };
 
@@ -123,9 +124,55 @@ void ReceiveMessages(const int client_fd) {
     std::cout << "[client] data #" << GetConnectionIndex(client_fd) << ": " << buff;
 }
 
-void EventHandlers(EventType event, const int fd) {
+void ServerAcceptConnection(const int kq, const int server_fd) {
+  struct sockaddr_in addr;
+  int socklen = sizeof(addr);
+
+  int client_fd = accept(server_fd, (struct sockaddr *)&addr,
+                         (socklen_t *)&socklen);
+  if (client_fd < 1) {
+    std::cerr << "[server] accept failed";
+    close(client_fd);
+    exit(-1);
+  }
+
+  // Get info client
+  getpeername(client_fd, (struct sockaddr *)&addr,
+              (socklen_t *)&socklen);
+  std::cout << "[+] [server] connection accepted from ip: "
+            << inet_ntoa(addr.sin_addr)
+            << " - port: " << ntohs(addr.sin_port)
+            << std::endl;
+
+  // add conection to array
+  if (AddConnection(client_fd) == 0) {
+    // event want to monitor
+    struct kevent evSet;
+    EV_SET(&evSet, client_fd, EVFILT_READ, EV_ADD, 0, 0, NULL);
+    kevent(kq, &evSet, 1, NULL, 0, NULL);
+
+    ServerSendWelcomeMsg(client_fd);
+  } else {
+    printf("Add failed connection.\n");
+    close(client_fd);
+  }
+}
+
+void ClientDisconnection(const int kq, const int client_fd) {
+  std::cout << "[client] #" << GetConnectionIndex(client_fd) << " disconnected.\n";
+
+  // event want to monitor
+  struct kevent evSet;
+  EV_SET(&evSet, client_fd, EVFILT_READ, EV_DELETE, 0, 0, NULL);
+  kevent(kq, &evSet, 1, NULL, 0, NULL);
+
+  RemoveConnection(client_fd);
+}
+
+void EventHandlers(EventType event, const int fd, const int kq) {
   switch (event) {
     case EventType::kAccept:
+      ServerAcceptConnection(kq, fd);
       break;
     case EventType::kRead:
       ReceiveMessages(fd);
@@ -135,21 +182,18 @@ void EventHandlers(EventType event, const int fd) {
       break;
     case EventType::kReadWrite:
       break;
+    case EventType::kClientDisconnection:
+      ClientDisconnection(kq, fd);
+      break;
 
     default:
       break;
   }
 }
 
-void EventDemultiplexer(int kq, int server_fd) {
-  // event want to monitor
-  struct kevent evSet;
-
+void EventDemultiplexer(const int kq, const int server_fd) {
   // events that were triggered
   struct kevent evList[MAX_EVENTS];
-
-  struct sockaddr_in addr;
-  int socklen = sizeof(addr);
 
   struct timespec tmout = {0,  /* block for 0 seconds at most */
                            0}; /* nanoseconds */
@@ -170,47 +214,13 @@ void EventDemultiplexer(int kq, int server_fd) {
         if (evList[i].filter == EVFILT_READ) {
           // Server - receive new connection
           if (evList[i].ident == server_fd) {
-            int client_fd = accept(evList[i].ident, (struct sockaddr *)&addr,
-                                   (socklen_t *)&socklen);
-            if (client_fd < 1) {
-              std::cerr << "[server] accept failed";
-              close(client_fd);
-              exit(-1);
-            }
-
-            // Get info client
-            getpeername(client_fd, (struct sockaddr *)&addr,
-                        (socklen_t *)&socklen);
-            std::cout << "[+] [server] connection accepted from ip: "
-                      << inet_ntoa(addr.sin_addr)
-                      << " - port: " << ntohs(addr.sin_port)
-                      << std::endl;
-
-            // add conection to array
-            if (AddConnection(client_fd) == 0) {
-              // event want to monitor
-              EV_SET(&evSet, client_fd, EVFILT_READ, EV_ADD, 0, 0, NULL);
-              kevent(kq, &evSet, 1, NULL, 0, NULL);
-
-              EventHandlers(EventType::kWrite, client_fd);
-            } else {
-              printf("Add failed connection.\n");
-              close(client_fd);
-            }
+            EventHandlers(EventType::kAccept, server_fd, kq);
           }  // client disconnected
           else if (evList[i].flags & EV_EOF) {
-            int client_fd = evList[i].ident;
-            std::cout << "[client] #" << GetConnectionIndex(client_fd) << " disconnected.\n";
+            EventHandlers(EventType::kClientDisconnection, evList[i].ident, kq);
 
-            EV_SET(&evSet, client_fd, EVFILT_READ, EV_DELETE, 0, 0, NULL);
-            kevent(kq, &evSet, 1, NULL, 0, NULL);
-
-            RemoveConnection(client_fd);
           } else {  // read message from client()
-            EventHandlers(EventType::kRead, evList[i].ident);
-
-            char msg[80] = "Server send!\n";
-            send(evList[i].ident, msg, strlen(msg), 0);
+            EventHandlers(EventType::kRead, evList[i].ident, kq);
           }
         } else if (evList[i].filter == EVFILT_WRITE) {
           // std::cout << "write!";
