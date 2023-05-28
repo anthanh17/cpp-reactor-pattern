@@ -13,11 +13,12 @@
 
 #include <ctime>
 #include <iostream>
+#include <vector>
 
 #define SERVER_PORT 9000
 #define MAX_EVENTS 32
-#define NUM_CLIENTS 10
-int clients_fd[NUM_CLIENTS];
+
+std::vector<int> clients_fd;
 
 enum class EventType {
   kNone,
@@ -30,33 +31,26 @@ enum class EventType {
 };
 
 int GetConnectionIndex(const int fd) {
-  for (int i = 0; i < NUM_CLIENTS; i++)
-    if (clients_fd[i] == fd) return i;
+  for (int i = 0; i < clients_fd.size(); i++)
+    if (clients_fd.at(i) == fd) return i;
   return -1;
 }
 
 int AddConnection(const int fd) {
-  if (fd < 1) return -1;
-  // get fd = = in client list
-  int index = GetConnectionIndex(0);
-  if (index == -1) {
-    std::cerr << "[server] index failed, there are no connections in the array!";
-    return -1;
-  }
-  // add fd to first element = 0
-  clients_fd[index] = fd;
+  if (fd < 0) return -1;
+  clients_fd.push_back(fd);
   return 0;
 }
 
 int RemoveConnection(const int fd) {
-  if (fd < 1)
+  if (fd < 0)
     return -1;
   int index = GetConnectionIndex(fd);
   if (index == -1) {
     std::cerr << "[server] index failed, there are no connections in the array!";
     return -1;
   }
-  clients_fd[index] = 0;
+  clients_fd.erase(clients_fd.begin() + index);
   return close(fd);
 }
 
