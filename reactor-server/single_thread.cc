@@ -16,7 +16,6 @@
 #include <vector>
 
 #define SERVER_PORT 9000
-#define MAX_EVENTS 32
 
 std::vector<int> clients_fd;
 
@@ -187,14 +186,14 @@ void EventHandlers(EventType event, const int fd, const int kq) {
 
 void EventDemultiplexer(const int kq, const int server_fd) {
   // events that were triggered
-  struct kevent evList[MAX_EVENTS];
+  struct kevent evList[1024];
 
   struct timespec time_out = {0,  /* block for 0 seconds at most */
                               0}; /* nanoseconds */
 
   while (1) {
     // returns the number of events placed in the eventlist
-    int num_events = kevent(kq, NULL, 0, evList, MAX_EVENTS, &time_out);
+    int num_events = kevent(kq, NULL, 0, evList, 1024, &time_out);
 
     if (num_events < 0) {
       std::cerr << "[server] kevent failed";
